@@ -2,7 +2,6 @@
 #include <Servo.h>
 #include <DHT.h>
 
-
 const int echoPin = 23;
 const int statusLED = 3;
 const int trigPin = 22;
@@ -14,18 +13,19 @@ DHT dht(DHTPin, DHT22);
 Servo xCamera;
 Servo yCamera;
 
-float getDistance(){
+float getDistance()
+{
 
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
-  return (pulseIn(echoPin, HIGH) * 0.0343) / 2;    // divided by 2 to take into account just going or coming back, not whole time.
+  return (pulseIn(echoPin, HIGH) * 0.0343) / 2; // divided by 2 to take into account just going or coming back, not whole time.
 }
 
-
-void setup(){
+void setup()
+{
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
   pinMode(statusLED, OUTPUT);
@@ -44,29 +44,30 @@ void setup(){
   // wait for the DHT to start itself as it takes 55 microseconds
   delayMicroseconds(100);
 
-
   Serial.begin(9600);
 
   int incoming = -1;
-  while (incoming < 0){
+  while (incoming < 0)
+  {
     incoming = Serial.read();
   }
   Serial.println(incoming);
-
-
 }
 
-void loop(){
+void loop()
+{
   StaticJsonDocument<200> data;
 
   DeserializationError err = deserializeJson(data, Serial);
 
-  if (err){
+  if (err)
+  {
     digitalWrite(statusLED, HIGH);
     return;
   }
 
-  if (data["header"] == "motor"){
+  if (data["header"] == "motor")
+  {
     digitalWrite(52, data["right_first"]);
     digitalWrite(53, data["left_first"]);
     digitalWrite(42, data["right_second"]);
@@ -75,9 +76,9 @@ void loop(){
     analogWrite(NULL, data["left_speed"]);
     xCamera.write(data["camera_horizontal"]);
     yCamera.write(data["camera_vertical"]);
-    
   }
-  if (data["header"] == "sensor"){
+  if (data["header"] == "sensor")
+  {
     StaticJsonDocument<200> doc;
     doc["distance"] = getDistance();
     doc["humidity"] = dht.readHumidity();
@@ -87,6 +88,4 @@ void loop(){
 
     Serial.println(jsonString);
   }
-  
-
 }
