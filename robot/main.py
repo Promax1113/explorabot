@@ -201,7 +201,12 @@ if __name__ == "__main__":
 
             sensor_data = read_sensor(ser)
             last_movement_data = movement_data
-
+            if (
+                not json.loads(sensor_data.decode())["humidity"]
+                or not json.loads(sensor_data.decode())["temperature"]
+            ):
+                print("dht sensor reading failed, retrying...")
+                sensor_data = read_sensor(ser)
             data_socket.send(struct.pack("!I", (len(sensor_data))))
             data_socket.sendall(sensor_data)
         except ConnectionResetError or ConnectionRefusedError:

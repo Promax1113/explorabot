@@ -11,15 +11,15 @@ def setup_camera():
     # Optionally set resolution and FPS explicitly
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    capture.set(cv2.CAP_PROP_FPS, 30)
+    capture.set(cv2.CAP_PROP_FPS, 20)
 
     # Optionally set resolution and FPS explicitly
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    capture.set(cv2.CAP_PROP_FPS, 30)
+    capture.set(cv2.CAP_PROP_FPS, 20)
 
-    server = MjpegServer("127.0.0.1", 8080)
-    stream = Stream(name="onboard-camera", size=(1280, 720), quality=70, fps=30)
+    server = MjpegServer("0.0.0.0", 8080)
+    stream = Stream(name="onboard-camera", size=(1280, 720), quality=60, fps=20)
 
     server.add_stream(stream)
     server.start()
