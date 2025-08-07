@@ -2,13 +2,20 @@
 #include <Servo.h>
 #include <DHT.h>
 
+
 const int echoPin = 23;
 const int statusLED = 3;
 const int trigPin = 22;
 
 const int DHTPin = 2;
 
-DHT dht(DHTPin, DHT22);
+float humidity;
+float temperature;
+unsigned long lastReadTime = 0;
+
+
+DHT dht(DHTPin, DHT21);
+
 
 Servo xCamera;
 Servo yCamera;
@@ -39,6 +46,7 @@ void setup()
   pinMode(53, OUTPUT);
   pinMode(42, OUTPUT);
   pinMode(43, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
 
   dht.begin();
   // wait for the DHT to start itself as it takes 55 microseconds
@@ -80,9 +88,14 @@ void loop()
   if (data["header"] == "sensor")
   {
     StaticJsonDocument<200> doc;
+    if (millis() - lastReadTime > 5 * 1000){
+      temperature = dht.readTemperature();
+      humidity = dht.readHumidity();
+      lastReadTime = millis();
+    }
     doc["distance"] = getDistance();
-    doc["humidity"] = dht.readHumidity();
-    doc["temperature"] = dht.readTemperature();
+    doc["temperature"] = temperature;
+    doc["humidity"] = humidity;
     char jsonString[200];
     unsigned int length = serializeJson(doc, jsonString);
 

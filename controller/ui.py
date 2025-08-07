@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QPushButton,
 )
-from numpy._core.multiarray import error
 import pygame
 from external_windows import SettingsWindow
 from backend import connect_to_robot, receive, raw_send, send
@@ -99,7 +98,7 @@ class MainWindow(QMainWindow):
         send(self.motor_socket, json.dumps(self.input).encode())
         try:
             data = self.get_sensor_data()
-        except ConnectionResetError:
+        except ConnectionResetError or BrokenPipeError:
             self.summon_dialog_box_on_error(
                 error_type="choice",
                 error={

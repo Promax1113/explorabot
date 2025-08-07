@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Final
 
+from numpy import right_shift
 import serial
 
 from camera import setup_camera
@@ -16,7 +17,7 @@ PORT: Final = "/dev/ttyACM0"
 BIND_IP: Final = "0.0.0.0"
 RETRIES: Final = 5
 
-translated_dict = {
+translated_dict_template = {
     "header": "motor",
     "right_first": 0,
     "left_first": 0,
@@ -119,18 +120,31 @@ def read_sensor(ser):
 
 def write_motor(ser, data: dict, last_data: dict):
     # serial_write(ser, {"header": "motor", "right_first": 1, "left_first": 1, "right_second": 0, "left_second": 0})
-    global translated_dict
+    global translated_dict_template
+
+
+
+    translated_dict = translated_dict_template
+
 
     if data["lx"] == 0:
-        translated_dict["right_first"] = 1 if data["ly"] > 0 else 0
-        translated_dict["left_first"] = 1 if data["ly"] > 0 else 0
-        translated_dict["right_second"] = (
-            0 if translated_dict["right_first"] == 1 else 1
-        )
+        translated_dict["right_first"] = 1 if data["ly"] < 0 else 0
+        translated_dict["left_first"] = 1 if data["ly"] < 0 else 0
+        translated_dict["right_second"] = 0 if translated_dict["right_first"] == 1 else 1
         translated_dict["left_second"] = 0 if translated_dict["left_first"] == 1 else 1
 
-        translated_dict["right_speed"] = abs(data["ly"]) * 255
-        translated_dict["left_speed"] = abs(data["ly"]) * 255
+
+
+    elif data["ly"] == 0:
+        translated_dict["right_first"] = 1 if data["lx"] < 0 else 0
+        translated_dict["left_first"] = 1 if data["lx"] > 0 else 0
+        translated_dict["right_second"] = 0 if translated_dict["right_first"] == 1 else 1
+        translated_dict["left_second"] = 0 if translated_dict["left_first"] == 1 else 1
+
+
+
+    translated_dict["right_speed"] = int(abs(data["ly"]) * 255)
+    translated_dict["left_speed"] = int(abs(data["ly"]) * 255)
 
     translated_dict["camera_horizontal"] -= data["cam_horiz"] * 13
     translated_dict["camera_vertical"] += data["cam_vert"] * 13
@@ -143,6 +157,8 @@ def write_motor(ser, data: dict, last_data: dict):
         translated_dict["camera_vertical"] = 20
     elif translated_dict["camera_vertical"] > 160:
         translated_dict["camera_vertical"] = 160
+
+    print(translated_dict)
     serial_write(ser, translated_dict)
     return translated_dict
 
@@ -166,10 +182,14 @@ if __name__ == "__main__":
 
     last_horiz_camera_input = 0
     last_vert_camera_input = 0
-    last_movement_data = {"lx": 0, "ly": 0, "camera_horiz": 0, "camera_vert": 0}
-    last_translated_data = translated_dict
+    last_translated_data = translated_dict_template
+    last_movement_data = {"lx": 0, "ly": 0, "cam_horiz": 0, "cam_vert": 0}
+    blank_movement_data = {"lx": 0, "ly": 0, "cam_horiz": 0, "cam_vert": 0}
+
+
 
     while True:
+
         try:
             ok = None
             while not ok:
@@ -179,35 +199,43 @@ if __name__ == "__main__":
 
             movement_data: dict = receive(motor_socket, decode=True)  # type: ignore
 
+
+
             movement_data["ly"] = (
-                0 if movement_data["lx"] > movement_data["ly"] else movement_data["ly"]
+                0 if abs(movement_data["lx"]) > abs(movement_data["ly"]) else movement_data["ly"]
             )
             movement_data["lx"] = (
-                0 if movement_data["ly"] > movement_data["lx"] else movement_data["lx"]
+                0 if abs(movement_data["ly"]) > abs(movement_data["lx"]) else movement_data["lx"]
             )
+            try:
+                abs_movement_data = {k: abs(v) for k, v in movement_data.items()}
+                if not sum(abs_movement_data.values()) <= 0.2:
+                    last_translated_data = write_motor(
+                        ser, movement_data, last_translated_data
+                    )
+                elif abs(last_movement_data["lx"]) > 0 and abs(movement_data["lx"]) < 0.2:
+                    last_translated_data = write_motor(
+                        ser, blank_movement_data, last_translated_data
+                    )
+                elif abs(last_movement_data["ly"]) > 0 and abs(movement_data["ly"]) < 0.2:
+                    last_translated_data = write_motor(
+                        ser, blank_movement_data, last_translated_data
+                    )
 
-            if not sum(movement_data.values()) == 0:
-                last_translated_data = write_motor(
-                    ser, movement_data, last_translated_data
-                )
-            elif last_movement_data["lx"] > 0 and movement_data["lx"] < 0.1:
-                last_translated_data = write_motor(
-                    ser, movement_data, last_translated_data
-                )
-            elif last_movement_data["ly"] > 0 and movement_data["ly"] < 0.1:
-                last_translated_data = write_motor(
-                    ser, movement_data, last_translated_data
-                )
 
-            sensor_data = read_sensor(ser)
-            last_movement_data = movement_data
-            if (
-                not json.loads(sensor_data.decode())["humidity"]
-                or not json.loads(sensor_data.decode())["temperature"]
-            ):
-                print("dht sensor reading failed, retrying...")
+
                 sensor_data = read_sensor(ser)
-            data_socket.send(struct.pack("!I", (len(sensor_data))))
-            data_socket.sendall(sensor_data)
+                last_movement_data = movement_data
+                if (
+                    not json.loads(sensor_data.decode())["humidity"]
+                    or not json.loads(sensor_data.decode())["temperature"]
+                ):
+                    print("dht sensor reading failed, retrying...")
+                    sensor_data = read_sensor(ser)
+                data_socket.send(struct.pack("!I", (len(sensor_data))))
+                data_socket.sendall(sensor_data)
+            except serial.SerialException:
+                ser = serial_setup()
+                continue
         except ConnectionResetError or ConnectionRefusedError:
             data_socket, motor_socket, command_socket = setup_sockets()

@@ -7,7 +7,7 @@ from typing import Final
 
 """CONSTANTS"""
 
-ROBOT_IP: Final = "192.168.1.63"
+ROBOT_IP: Final = "10.10.10.1"
 
 
 def connect_to_robot(port):
@@ -68,3 +68,5 @@ def send(sock: socket.socket, data: bytes):
 
 if __name__ == "__main__":
     sk = connect_to_robot(7777)
+    sk = connect_to_robot(7778)
+    sk = connect_to_robot(7779)
