@@ -7,8 +7,8 @@ from typing import Final
 
 """CONSTANTS"""
 
-ROBOT_IP: Final = "10.10.10.1"
-
+ROBOT_IP: Final = "192.168.1.71"
+MOTOR_SOCKET_ADDR = (ROBOT_IP, 7778)
 
 def connect_to_robot(port):
     global ROBOT_IP
@@ -33,6 +33,11 @@ def connect_to_robot(port):
         exit()
     print(f"Created socket and connected to {ROBOT_IP}:{port}")
 
+    return sock
+def dgram_connect_to_robot(port):
+    global ROBOT_IP
+    sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+    print(f"Created datagram socket, awaiting for data to be sent to the robot.")
     return sock
 
 
@@ -62,8 +67,14 @@ def raw_send(sock: socket.socket, data: bytes):
 
 def send(sock: socket.socket, data: bytes):
     assert isinstance(data, bytes)
+
     sock.send(struct.pack("!I", len(data)))
     sock.sendall(data)
+
+def dgram_send(sock: socket.socket, data: bytes):
+    assert isinstance(data, bytes)
+    sock.sendto(struct.pack("!I", len(data)), MOTOR_SOCKET_ADDR)
+    sock.sendto(data, MOTOR_SOCKET_ADDR)
 
 
 if __name__ == "__main__":

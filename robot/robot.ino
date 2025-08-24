@@ -3,22 +3,50 @@
 #include <DHT.h>
 
 
-const int echoPin = 23;
+const int echoPin = 2;
 const int statusLED = 3;
-const int trigPin = 22;
+const int trigPin = 3;
 
-const int DHTPin = 2;
+const int DHTPin = 45;
+
+int voltageReaderPin = A0;
+int voltageReaderValue;
 
 float humidity;
 float temperature;
 unsigned long lastReadTime = 0;
-
+unsigned long lastBatReadTime = millis();
 
 DHT dht(DHTPin, DHT21);
 
+// Motors
+int rightEnable = 10;
+int rightFirst = 9;
+int rightSecond = 8;
+int leftEnable = 6;
+int leftFirst = 5;
+int leftSecond = 4;
+
+// Relays
+int motorRelayPin = 22;
+int servoRelayPin = 23;
+int lightsRelayPin = 24;
+
+float battery;
 
 Servo xCamera;
 Servo yCamera;
+
+float getBatteryPercentage(){
+  voltageReaderValue = analogRead(voltageReaderPin);
+  float result = fmap(voltageReaderValue, 0, 1023, 0.0, 25);
+  return result;
+}
+
+float fmap(float x, float in_min, float in_max, float out_min, float out_max)
+{
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 
 float getDistance()
 {
@@ -33,20 +61,26 @@ float getDistance()
 
 void setup()
 {
+  
+  pinMode(motorRelayPin, OUTPUT);
+  pinMode(servoRelayPin, OUTPUT);
+  pinMode(lightsRelayPin, OUTPUT);
+
+  digitalWrite(motorRelayPin, LOW);
+  digitalWrite(servoRelayPin, LOW);
+  digitalWrite(lightsRelayPin, LOW);
+
+
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
   pinMode(statusLED, OUTPUT);
 
-  xCamera.attach(8);
-  yCamera.attach(9);
+  xCamera.attach(12);
+  yCamera.attach(11);
   xCamera.write(90);
   yCamera.write(90);
 
-  pinMode(52, OUTPUT);
-  pinMode(53, OUTPUT);
-  pinMode(42, OUTPUT);
-  pinMode(43, OUTPUT);
-  pinMode(LED_BUILTIN, OUTPUT);
+  battery = getBatteryPercentage();
 
   dht.begin();
   // wait for the DHT to start itself as it takes 55 microseconds
@@ -54,48 +88,62 @@ void setup()
 
   Serial.begin(9600);
 
-  int incoming = -1;
-  while (incoming < 0)
-  {
-    incoming = Serial.read();
-  }
-  Serial.println(incoming);
+  //while (Serial.available() == 0);
+
+  //int incoming = Serial.read();
+
+  //delay(1500);
+  //Serial.println(incoming);
+
 }
 
 void loop()
 {
   StaticJsonDocument<200> data;
 
+
+  if (millis() - lastBatReadTime > 30 * 1000)
+    {
+     battery = getBatteryPercentage();
+
+ 
+      lastBatReadTime = millis();
+    } 
+
   DeserializationError err = deserializeJson(data, Serial);
 
   if (err)
   {
-    digitalWrite(statusLED, HIGH);
+
     return;
   }
-
   if (data["header"] == "motor")
   {
-    digitalWrite(52, data["right_first"]);
-    digitalWrite(53, data["left_first"]);
-    digitalWrite(42, data["right_second"]);
-    digitalWrite(43, data["left_second"]);
-    analogWrite(NULL, data["right_speed"]);
-    analogWrite(NULL, data["left_speed"]);
+    digitalWrite(rightFirst, data["right_first"]);
+    digitalWrite(leftFirst, data["left_first"]);
+    digitalWrite(rightSecond, data["right_second"]);
+    digitalWrite(leftSecond, data["left_second"]);
+    analogWrite(rightEnable, data["right_speed"]);
+    analogWrite(leftEnable, data["left_speed"]);
     xCamera.write(data["camera_horizontal"]);
     yCamera.write(data["camera_vertical"]);
+  }
+  if (data["header"] == "battery"){
+    Serial.println(getBatteryPercentage());
   }
   if (data["header"] == "sensor")
   {
     StaticJsonDocument<200> doc;
-    if (millis() - lastReadTime > 5 * 1000){
+    if (millis() - lastReadTime > 5 * 1000)
+    {
       temperature = dht.readTemperature();
       humidity = dht.readHumidity();
       lastReadTime = millis();
-    }
+    } 
     doc["distance"] = getDistance();
     doc["temperature"] = temperature;
     doc["humidity"] = humidity;
+    doc["battery"] = battery;
     char jsonString[200];
     unsigned int length = serializeJson(doc, jsonString);
 

@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
 import configparser
 
 

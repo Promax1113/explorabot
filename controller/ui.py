@@ -4,9 +4,10 @@ import struct
 import sys
 import time
 from types import FunctionType, MethodType
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QStandardItem, QStandardItemModel
-from PyQt6.QtWidgets import (
+import cv2 as cv
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtGui import QStandardItem, QStandardItemModel, QImage, QPixmap
+from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QHBoxLayout,
@@ -16,11 +17,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QGridLayout,
-    QPushButton,
+    QPushButton
 )
 import pygame
 from external_windows import SettingsWindow
-from backend import connect_to_robot, receive, raw_send, send
+from backend import ROBOT_IP, connect_to_robot, receive, raw_send, send, dgram_connect_to_robot, dgram_send
 from gamepad_input import get_input, BASE_INPUT_DICT
 
 
@@ -63,6 +64,48 @@ class GamepadInputThread(Thread):
             self.input_ready_signal.emit(self.input)
             self.clock.tick(200)
 
+class CameraThread(Thread):
+    frame_ready_signal = pyqtSignal(QImage)
+
+    def __init__(self, url) -> None:
+        super().__init__()
+        self.source = url
+
+    def run(self) -> None:
+        self.capture = cv.VideoCapture(self.source)
+        while self._run_flag:
+            ret, frame = self.capture.read()
+            if not ret:
+                frame = cv.imread("./ui/nocamera.png")
+                rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+                height, width, channel_count = rgb_frame.shape
+                # Create a deep-copied QImage to avoid dangling pointers to numpy memory
+                image = QImage(
+                    rgb_frame.data,
+                    width,
+                    height,
+                    width * channel_count,
+                    QImage.Format_RGB888,
+                ).copy()
+                self.frame_ready_signal.emit(image)
+                self.msleep(10)
+            else:
+                rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+                height, width, channel_count = rgb_frame.shape
+
+                bytes_per_line = width * channel_count
+
+                # Create a deep-copied QImage to avoid dangling pointers to numpy memory
+                self.qt_compatible_image = QImage(
+                    rgb_frame.data, width, height, bytes_per_line, QImage.Format.Format_RGB888
+                ).copy()
+                self.frame_ready_signal.emit(self.qt_compatible_image)
+
+    def stop(self) -> None:
+        super().stop()
+        if hasattr(self, "capture") and self.capture is not None:
+            self.capture.release()
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -83,6 +126,9 @@ class MainWindow(QMainWindow):
         self.gamepad_thread.input_ready_signal.connect(self.set_input)
         self.gamepad_thread.start()
 
+        self.camera_thread = CameraThread(f"http://{ROBOT_IP}:8080/onboard-camera")
+        self.camera_thread.frame_ready_signal.connect(self.update_image)
+
     def setup_layout(self):
         self.container = QWidget()
         self.setCentralWidget(self.container)
@@ -92,13 +138,15 @@ class MainWindow(QMainWindow):
         self.connect_button.clicked.connect(self.setup_sockets)
         self.window_layout.addWidget(self.connect_button, 0, 0)
         self.connect_window_layout = self.window_layout
+        self.image_label = QLabel()
+        self.window_layout.addWidget(self.image_label, 1, 0, 3, 3)
 
     def communicate_with_robot(self):
         raw_send(self.sensor_socket, struct.pack("!I", 1))
-        send(self.motor_socket, json.dumps(self.input).encode())
+        dgram_send(self.motor_socket, json.dumps(self.input).encode())
         try:
             data = self.get_sensor_data()
-        except ConnectionResetError or BrokenPipeError:
+        except (ConnectionResetError, BrokenPipeError):
             self.summon_dialog_box_on_error(
                 error_type="choice",
                 error={
@@ -140,6 +188,13 @@ class MainWindow(QMainWindow):
             self.model.insertRow(row_position, [index, value])
             self.sensor_data_table.setModel(self.model)
             self.window_layout.addWidget(self.sensor_data_table, 1, 0, 1, 2)
+
+    def update_image(self, image):
+        pixmap = QPixmap.fromImage(image)
+        scaled_pixmap = pixmap.scaled(
+            self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled_pixmap)
 
     def summon_dialog_box_on_error(
         self, error_type, error: dict, choices: list[Choice] = []
@@ -193,11 +248,13 @@ class MainWindow(QMainWindow):
         try:
             self.sensor_socket: socket.socket = connect_to_robot(7777)
             time.sleep(0.5)
-            self.motor_socket: socket.socket = connect_to_robot(7778)
+            self.motor_socket: socket.socket = dgram_connect_to_robot(7778)
             time.sleep(0.5)
             self.command_socket: socket.socket = connect_to_robot(7779)
             time.sleep(0.5)
-        except ConnectionRefusedError or OSError:
+            
+            self.camera_thread.start()
+        except (ConnectionRefusedError, OSError):
             self.summon_dialog_box_on_error(
                 error_type="info",
                 error={
@@ -206,7 +263,6 @@ class MainWindow(QMainWindow):
                 },
             )
             return
-        raw_send(self.sensor_socket, struct.pack("!I", 1))
 
         self.timer.timeout.connect(self.communicate_with_robot)
         self.timer.start(1)

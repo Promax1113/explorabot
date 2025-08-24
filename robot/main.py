@@ -31,10 +31,10 @@ translated_dict_template = {
 
 
 def socket_setup(port: int) -> socket.socket:
-    # Setup IPv4 socket using UDP for lowest latency.
+    global BIND_IP
     server = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     server.bind((BIND_IP, port))
     client = None
 
@@ -49,12 +49,19 @@ def socket_setup(port: int) -> socket.socket:
 
     client.sendall(struct.pack("!I", check_data))
     return client
+def dgram_socket_setup(port: int) -> socket.socket:
+    global BIND_IP
+    sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.bind((BIND_IP, port))
 
+    return sock
 
 def serial_setup():
     global PORT, RETRIES
     try:
-        ser = serial.Serial(port=PORT, baudrate=9600)
+        ser = serial.Serial(port=PORT, baudrate=9600, timeout=2)
     except serial.SerialException as e:
         print("There was an error:", e)
         print(f"Retrying {RETRIES} times.")
@@ -69,16 +76,21 @@ def serial_setup():
 
         if not ser:
             exit(-1)
-    time.sleep(1)
-    # Check the connection works well.
-    _number_check = random.randint(0, 255)
-    ser.write(bytes([_number_check]))
+    time.sleep(2)
+    # # Check the connection works well.
+    # _number_check = random.randint(1, 254)
+    # ser.write(bytes([_number_check]))
 
-    check = None
+    # check = None
 
-    while not check or check != _number_check:
-        check = ser.readline()
-        check = int(check.decode())
+    # while check != _number_check:
+    #     print("checking... sent", _number_check)
+    #     check = ser.readline()
+    #     if not check:
+    #         print("had a timeout")
+    #         continue
+    #     check = int(check.decode().strip())
+    #     print(check)
 
     print(f"Arduino Board connected on {PORT} at baud rate 9600.")
 
@@ -104,6 +116,21 @@ def receive(sock: socket.socket, decode=True) -> dict | bytes:
 
     return received
 
+def dgram_receive(sock: socket.socket, decode=True) -> dict | bytes:
+    message_size = None
+    while not message_size:
+        message_size = sock.recvfrom(4)[0]
+    message_size = struct.unpack("!I", message_size)[0]
+
+    received = b""
+
+    while len(received) < message_size:
+        data = sock.recvfrom(min(message_size - len(received), 1024))[0]
+        while not data:
+            data = sock.recvfrom(min(message_size - len(received), 1024))[0]
+        received += data
+
+    return json.loads(received.decode()) if decode else received
 
 def serial_read(ser: serial.Serial):
     return ser.readline()
@@ -128,23 +155,25 @@ def write_motor(ser, data: dict, last_data: dict):
 
 
     if data["lx"] == 0:
-        translated_dict["right_first"] = 1 if data["ly"] < 0 else 0
-        translated_dict["left_first"] = 1 if data["ly"] < 0 else 0
+        translated_dict["right_first"] = 1 if data["ly"] > 0 else 0
+        translated_dict["left_first"] = 1 if data["ly"] > 0 else 0
         translated_dict["right_second"] = 0 if translated_dict["right_first"] == 1 else 1
         translated_dict["left_second"] = 0 if translated_dict["left_first"] == 1 else 1
+        translated_dict["right_speed"] = int(abs(data["ly"]) * 150)
+        translated_dict["left_speed"] = int(abs(data["ly"]) * 150)
 
 
 
     elif data["ly"] == 0:
-        translated_dict["right_first"] = 1 if data["lx"] < 0 else 0
-        translated_dict["left_first"] = 1 if data["lx"] > 0 else 0
+        translated_dict["right_first"] = 1 if data["lx"] > 0 else 0
+        translated_dict["left_first"] = 1 if data["lx"] < 0 else 0
         translated_dict["right_second"] = 0 if translated_dict["right_first"] == 1 else 1
         translated_dict["left_second"] = 0 if translated_dict["left_first"] == 1 else 1
+        translated_dict["right_speed"] = int(abs(data["lx"]) * 150)
+        translated_dict["left_speed"] = int(abs(data["lx"]) * 150)
 
 
 
-    translated_dict["right_speed"] = int(abs(data["ly"]) * 255)
-    translated_dict["left_speed"] = int(abs(data["ly"]) * 255)
 
     translated_dict["camera_horizontal"] -= data["cam_horiz"] * 13
     translated_dict["camera_vertical"] += data["cam_vert"] * 13
@@ -165,7 +194,7 @@ def write_motor(ser, data: dict, last_data: dict):
 
 def setup_sockets():
     data_socket = socket_setup(7777)
-    motor_socket = socket_setup(7778)
+    motor_socket = dgram_socket_setup(7778)
     command_socket = socket_setup(7779)
     return data_socket, motor_socket, command_socket
 
@@ -173,7 +202,12 @@ def setup_sockets():
 if __name__ == "__main__":
     ser = serial_setup()
 
+    camera_thread = threading.Thread(target=setup_camera)
+    camera_thread.start()
+    
     data_socket, motor_socket, command_socket = setup_sockets()
+    
+
 
     reset = False
 
@@ -191,13 +225,9 @@ if __name__ == "__main__":
     while True:
 
         try:
-            ok = None
-            while not ok:
-                ok = data_socket.recv(4)
-                if ok and struct.unpack("!I", ok)[0] == 1:
-                    break
+           
 
-            movement_data: dict = receive(motor_socket, decode=True)  # type: ignore
+            movement_data: dict = dgram_receive(motor_socket, decode=True)  # type: ignore
 
 
 
@@ -227,8 +257,8 @@ if __name__ == "__main__":
                 sensor_data = read_sensor(ser)
                 last_movement_data = movement_data
                 if (
-                    not json.loads(sensor_data.decode())["humidity"]
-                    or not json.loads(sensor_data.decode())["temperature"]
+                    json.loads(sensor_data.decode())["humidity"]
+                    or json.loads(sensor_data.decode())["temperature"]
                 ):
                     print("dht sensor reading failed, retrying...")
                     sensor_data = read_sensor(ser)
