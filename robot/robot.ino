@@ -4,7 +4,6 @@
 
 
 const int echoPin = 2;
-const int statusLED = 3;
 const int trigPin = 3;
 
 const int DHTPin = 45;
