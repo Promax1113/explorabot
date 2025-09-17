@@ -3,19 +3,24 @@ import random
 import socket
 import struct
 import threading
+import multiprocessing
 import time
 from typing import Final
 
-from numpy import right_shift
+
 import serial
 
 from camera import setup_camera
+
+import os
 
 """CONSTANTS"""
 
 PORT: Final = "/dev/ttyACM0"
 BIND_IP: Final = "0.0.0.0"
 RETRIES: Final = 5
+BASE_INPUT_DICT = {"lx": 0, "ly": 0, "cam_horiz": 0, "cam_vert": 0}
+
 
 translated_dict_template = {
     "header": "motor",
@@ -49,6 +54,8 @@ def socket_setup(port: int) -> socket.socket:
 
     client.sendall(struct.pack("!I", check_data))
     return client
+
+
 def dgram_socket_setup(port: int) -> socket.socket:
     global BIND_IP
     sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -57,6 +64,7 @@ def dgram_socket_setup(port: int) -> socket.socket:
     sock.bind((BIND_IP, port))
 
     return sock
+
 
 def serial_setup():
     global PORT, RETRIES
@@ -116,21 +124,29 @@ def receive(sock: socket.socket, decode=True) -> dict | bytes:
 
     return received
 
+
 def dgram_receive(sock: socket.socket, decode=True) -> dict | bytes:
     message_size = None
-    while not message_size:
-        message_size = sock.recvfrom(4)[0]
-    message_size = struct.unpack("!I", message_size)[0]
+    sock.settimeout(2)
+    try:
+        while not message_size:
+            message_size = sock.recvfrom(4)[0]
+        message_size = struct.unpack("!I", message_size)[0]
 
-    received = b""
+        received = b""
 
-    while len(received) < message_size:
-        data = sock.recvfrom(min(message_size - len(received), 1024))[0]
-        while not data:
+        while len(received) < message_size:
             data = sock.recvfrom(min(message_size - len(received), 1024))[0]
-        received += data
+            while not data:
+                data = sock.recvfrom(min(message_size - len(received), 1024))[0]
+            received += data
+    except socket.timeout:
+        received = None
+    if received:
+        return json.loads(received.decode())
+    else:
+        return BASE_INPUT_DICT
 
-    return json.loads(received.decode()) if decode else received
 
 def serial_read(ser: serial.Serial):
     return ser.readline()
@@ -149,31 +165,27 @@ def write_motor(ser, data: dict, last_data: dict):
     # serial_write(ser, {"header": "motor", "right_first": 1, "left_first": 1, "right_second": 0, "left_second": 0})
     global translated_dict_template
 
-
-
     translated_dict = translated_dict_template
-
 
     if data["lx"] == 0:
         translated_dict["right_first"] = 1 if data["ly"] > 0 else 0
         translated_dict["left_first"] = 1 if data["ly"] > 0 else 0
-        translated_dict["right_second"] = 0 if translated_dict["right_first"] == 1 else 1
+        translated_dict["right_second"] = (
+            0 if translated_dict["right_first"] == 1 else 1
+        )
         translated_dict["left_second"] = 0 if translated_dict["left_first"] == 1 else 1
-        translated_dict["right_speed"] = int(abs(data["ly"]) * 150)
-        translated_dict["left_speed"] = int(abs(data["ly"]) * 150)
-
-
+        translated_dict["right_speed"] = int(abs(data["ly"]) * 200)
+        translated_dict["left_speed"] = int(abs(data["ly"]) * 200)
 
     elif data["ly"] == 0:
         translated_dict["right_first"] = 1 if data["lx"] > 0 else 0
         translated_dict["left_first"] = 1 if data["lx"] < 0 else 0
-        translated_dict["right_second"] = 0 if translated_dict["right_first"] == 1 else 1
+        translated_dict["right_second"] = (
+            0 if translated_dict["right_first"] == 1 else 1
+        )
         translated_dict["left_second"] = 0 if translated_dict["left_first"] == 1 else 1
-        translated_dict["right_speed"] = int(abs(data["lx"]) * 150)
-        translated_dict["left_speed"] = int(abs(data["lx"]) * 150)
-
-
-
+        translated_dict["right_speed"] = int(abs(data["lx"]) * 200)
+        translated_dict["left_speed"] = int(abs(data["lx"]) * 200)
 
     translated_dict["camera_horizontal"] -= data["cam_horiz"] * 13
     translated_dict["camera_vertical"] += data["cam_vert"] * 13
@@ -200,14 +212,19 @@ def setup_sockets():
 
 
 if __name__ == "__main__":
-    ser = serial_setup()
 
-    camera_thread = threading.Thread(target=setup_camera)
-    camera_thread.start()
-    
+    if not os.getenv("RDUMMY"):
+        ser = serial_setup()
+
+        # camera_thread = threading.Thread(target=setup_camera)
+        # camera_thread.start()
+        camera_process = multiprocessing.Process(target=setup_camera)
+        camera_process.start()
+
+    else:
+        ser = None
+
     data_socket, motor_socket, command_socket = setup_sockets()
-    
-
 
     reset = False
 
@@ -219,23 +236,22 @@ if __name__ == "__main__":
     last_translated_data = translated_dict_template
     last_movement_data = {"lx": 0, "ly": 0, "cam_horiz": 0, "cam_vert": 0}
     blank_movement_data = {"lx": 0, "ly": 0, "cam_horiz": 0, "cam_vert": 0}
-
-
-
+    sensor_data = json.dumps({"sample": "value"}).encode()
     while True:
 
         try:
-           
 
-            movement_data: dict = dgram_receive(motor_socket, decode=True)  # type: ignore
-
-
+            movement_data: dict = dgram_receive(motor_socket, decode=True)
 
             movement_data["ly"] = (
-                0 if abs(movement_data["lx"]) > abs(movement_data["ly"]) else movement_data["ly"]
+                0
+                if abs(movement_data["lx"]) > abs(movement_data["ly"])
+                else movement_data["ly"]
             )
             movement_data["lx"] = (
-                0 if abs(movement_data["ly"]) > abs(movement_data["lx"]) else movement_data["lx"]
+                0
+                if abs(movement_data["ly"]) > abs(movement_data["lx"])
+                else movement_data["lx"]
             )
             try:
                 abs_movement_data = {k: abs(v) for k, v in movement_data.items()}
@@ -243,25 +259,46 @@ if __name__ == "__main__":
                     last_translated_data = write_motor(
                         ser, movement_data, last_translated_data
                     )
-                elif abs(last_movement_data["lx"]) > 0 and abs(movement_data["lx"]) < 0.2:
-                    last_translated_data = write_motor(
-                        ser, blank_movement_data, last_translated_data
-                    )
-                elif abs(last_movement_data["ly"]) > 0 and abs(movement_data["ly"]) < 0.2:
-                    last_translated_data = write_motor(
-                        ser, blank_movement_data, last_translated_data
-                    )
-
-
-
-                sensor_data = read_sensor(ser)
-                last_movement_data = movement_data
-                if (
-                    json.loads(sensor_data.decode())["humidity"]
-                    or json.loads(sensor_data.decode())["temperature"]
+                elif (
+                    abs(last_movement_data["lx"]) > 0 and abs(movement_data["lx"]) < 0.2
                 ):
-                    print("dht sensor reading failed, retrying...")
-                    sensor_data = read_sensor(ser)
+                    last_translated_data = write_motor(
+                        ser, blank_movement_data, last_translated_data
+                    )
+                elif (
+                    abs(last_movement_data["ly"]) > 0 and abs(movement_data["ly"]) < 0.2
+                ):
+                    last_translated_data = write_motor(
+                        ser, blank_movement_data, last_translated_data
+                    )
+                if ser:
+                    _sensor_data = read_sensor(ser)
+                last_movement_data = movement_data
+                if ser:
+                    try:
+                        if (
+                            json.loads(_sensor_data.decode())["humidity"] == None
+                            or json.loads(_sensor_data.decode())["temperature"] == None
+                        ):
+                            sensor_data = json.loads(sensor_data.decode())
+                            sensor_data["humidity"] = json.loads(_sensor_data.decode())[
+                                "humidity"
+                            ] = -1
+                            sensor_data["temperature"] = json.loads(
+                                _sensor_data.decode()
+                            )["temperature"] = -1
+                            sensor_data = json.dumps(sensor_data).encode()
+                            print("dht sensor reading failed, passing...")
+                        else:
+                            sensor_data = _sensor_data
+                    except json.decoder.JSONDecodeError:
+                        print("Values were invalid.")
+                        sensor_data = json.dumps(
+                            {"status": "invalid data was collected from the sensor"}
+                        ).encode()
+
+                if not ser:
+                    sensor_data = json.dumps({"test": True}).encode()
                 data_socket.send(struct.pack("!I", (len(sensor_data))))
                 data_socket.sendall(sensor_data)
             except serial.SerialException:

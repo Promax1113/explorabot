@@ -20,11 +20,11 @@ DHT dht(DHTPin, DHT21);
 
 // Motors
 int rightEnable = 10;
-int rightFirst = 9;
-int rightSecond = 8;
+int rightFirst = 8;
+int rightSecond = 9;
 int leftEnable = 6;
-int leftFirst = 5;
-int leftSecond = 4;
+int leftFirst = 4;
+int leftSecond = 5;
 
 // Relays
 int motorRelayPin = 22;
@@ -78,6 +78,9 @@ void setup()
   yCamera.attach(11);
   xCamera.write(90);
   yCamera.write(90);
+
+  humidity = dht.readHumidity()
+  temperature = dht.readTemperature()
 
   battery = getBatteryPercentage();
 
